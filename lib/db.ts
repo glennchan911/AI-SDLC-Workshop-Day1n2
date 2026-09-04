@@ -44,6 +44,19 @@ db.exec(`
 
 export type Priority = 'high' | 'medium' | 'low';
 export type RecurrencePattern = 'daily' | 'weekly' | 'monthly' | 'yearly';
+export type ReminderMinutes = 15 | 30 | 60 | 120 | 1440 | 2880 | 10080;
+
+export const REMINDER_LABELS: Record<ReminderMinutes, string> = {
+  15: '15m',
+  30: '30m',
+  60: '1h',
+  120: '2h',
+  1440: '1d',
+  2880: '2d',
+  10080: '1w',
+};
+
+export const REMINDER_OPTIONS: ReminderMinutes[] = [15, 30, 60, 120, 1440, 2880, 10080];
 
 export interface User {
   id: number;
@@ -189,6 +202,21 @@ export const todoDB = {
   },
   deleteTodo(userId: number, id: number) {
     return this.delete(userId, id);
+  },
+  // Todos whose reminder window has opened (due_date - reminder_minutes <= now)
+  // and that haven't been notified yet. `now` must be an ISO 8601 UTC instant,
+  // the same representation `due_date` is stored in, so the comparison is a
+  // plain instant comparison regardless of timezone.
+  getDueReminders(userId: number, now: string) {
+    return db.prepare(`
+      SELECT * FROM todos
+      WHERE user_id = ?
+        AND completed = 0
+        AND due_date IS NOT NULL
+        AND reminder_minutes IS NOT NULL
+        AND last_notification_sent IS NULL
+        AND datetime(due_date, '-' || reminder_minutes || ' minutes') <= datetime(?)
+    `).all(userId, now) as Todo[];
   },
 };
 

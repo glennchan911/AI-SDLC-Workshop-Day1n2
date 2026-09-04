@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
-import { todoDB } from '@/lib/db';
+import { REMINDER_OPTIONS, todoDB } from '@/lib/db';
 import { getSingaporeNow } from '@/lib/timezone';
 
 export async function GET() {
@@ -46,6 +46,18 @@ export async function POST(request: NextRequest) {
     if (due < minDue) {
       return NextResponse.json(
         { error: 'Due date must be at least 1 minute in the future' },
+        { status: 400 }
+      );
+    }
+  }
+
+  if (body.reminder_minutes !== undefined && body.reminder_minutes !== null) {
+    if (!(REMINDER_OPTIONS as number[]).includes(Number(body.reminder_minutes))) {
+      return NextResponse.json({ error: 'Invalid reminder timing' }, { status: 400 });
+    }
+    if (!body.due_date) {
+      return NextResponse.json(
+        { error: 'A reminder requires a due date' },
         { status: 400 }
       );
     }

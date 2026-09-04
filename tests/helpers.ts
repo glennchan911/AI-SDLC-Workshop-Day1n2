@@ -38,6 +38,7 @@ export async function createTodo(
     dueDate?: string;
     isRecurring?: boolean;
     recurrencePattern?: 'daily' | 'weekly' | 'monthly' | 'yearly';
+    reminderMinutes?: 15 | 30 | 60 | 120 | 1440 | 2880 | 10080;
   }
 ) {
   const titleInput = page.getByPlaceholder('Add a new todo');
@@ -53,6 +54,9 @@ export async function createTodo(
     if (options.recurrencePattern) {
       await page.locator('select').nth(1).selectOption(options.recurrencePattern);
     }
+  }
+  if (options.reminderMinutes) {
+    await page.getByLabel('Reminder').first().selectOption(String(options.reminderMinutes));
   }
   await expect(page.getByRole('button', { name: 'Add Todo' })).toBeEnabled();
   await page.getByRole('button', { name: 'Add Todo' }).click();

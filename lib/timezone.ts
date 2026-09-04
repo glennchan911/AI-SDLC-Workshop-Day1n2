@@ -1,25 +1,12 @@
+// A JS `Date` is just an absolute instant (epoch milliseconds) with no
+// inherent timezone, so "now in Singapore" and "now" are the same instant --
+// only *formatting*/wall-clock extraction is timezone-sensitive (handled by
+// `toSingaporeParts`/`formatSingaporeDate` below). Returning the real instant
+// here (rather than re-labeling the Singapore wall-clock digits as if they
+// were UTC) keeps this value directly comparable to other genuine UTC
+// instants stored in the app, such as `due_date` and `last_notification_sent`.
 export function getSingaporeNow(date: Date = new Date()): Date {
-  const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Singapore',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-
-  const parts = formatter.formatToParts(date);
-  const values = Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
-  const year = Number(values.year);
-  const month = Number(values.month);
-  const day = Number(values.day);
-  const hour = Number(values.hour);
-  const minute = Number(values.minute);
-  const second = Number(values.second);
-
-  return new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  return date;
 }
 
 export interface SingaporeDateParts {

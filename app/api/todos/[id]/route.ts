@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth';
-import { todoDB } from '@/lib/db';
+import { REMINDER_OPTIONS, todoDB } from '@/lib/db';
 import { getSingaporeNow } from '@/lib/timezone';
 import { calculateNextDueDate } from '@/lib/recurrence';
 
@@ -88,6 +88,28 @@ export async function PUT(
 
   if (body.is_recurring !== undefined) {
     patch.is_recurring = body.is_recurring ? 1 : 0;
+  }
+
+  const effectiveReminderMinutes = body.reminder_minutes !== undefined ? body.reminder_minutes : existing.reminder_minutes;
+
+  if (effectiveReminderMinutes !== undefined && effectiveReminderMinutes !== null) {
+    if (!(REMINDER_OPTIONS as number[]).includes(Number(effectiveReminderMinutes))) {
+      return NextResponse.json({ error: 'Invalid reminder timing' }, { status: 400 });
+    }
+    if (!effectiveDueDate) {
+      return NextResponse.json(
+        { error: 'A reminder requires a due date' },
+        { status: 400 }
+      );
+    }
+  }
+
+  // A reminder that already fired must be re-armed whenever the due date or
+  // reminder timing changes, so the new window can notify again. Skip this
+  // when the request is itself the notification-check client's dedicated
+  // "mark as sent" call (which only ever sets `last_notification_sent`).
+  if ((body.due_date !== undefined || body.reminder_minutes !== undefined) && body.last_notification_sent === undefined) {
+    patch.last_notification_sent = null;
   }
 
   // Only spawn a next instance on the false -> true completion transition, so a

@@ -1,10 +1,25 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import type { Priority, RecurrencePattern, Todo } from '@/lib/db';
+import type { Priority, RecurrencePattern, ReminderMinutes, Todo } from '@/lib/db';
+import { useNotifications } from '@/lib/hooks/useNotifications';
 
 const PRIORITY_ORDER: Record<Priority, number> = { high: 0, medium: 1, low: 2 };
 const RECURRENCE_PATTERNS: RecurrencePattern[] = ['daily', 'weekly', 'monthly', 'yearly'];
+const REMINDER_OPTIONS: ReminderMinutes[] = [15, 30, 60, 120, 1440, 2880, 10080];
+// Mirrors `REMINDER_LABELS` in lib/db.ts. Redefined locally (rather than
+// imported) because lib/db.ts initializes better-sqlite3 at module scope,
+// which cannot be pulled into a client bundle -- see "Never import lib/db.ts
+// directly in client components" in the project conventions.
+const REMINDER_LABELS: Record<ReminderMinutes, string> = {
+  15: '15m',
+  30: '30m',
+  60: '1h',
+  120: '2h',
+  1440: '1d',
+  2880: '2d',
+  10080: '1w',
+};
 
 function sortTodos(todos: Todo[]): Todo[] {
   return [...todos].sort((a, b) => {
@@ -99,6 +114,80 @@ function RecurrenceFields({
   );
 }
 
+function ReminderBadge({ minutes }: { minutes: ReminderMinutes }) {
+  return (
+    <span
+      style={{
+        fontSize: '0.75rem',
+        fontWeight: 600,
+        color: '#9a3412',
+        background: '#ffedd5',
+        border: '1px solid #fdba74',
+        borderRadius: '999px',
+        padding: '0.1rem 0.6rem',
+      }}
+    >
+      🔔 {REMINDER_LABELS[minutes]}
+    </span>
+  );
+}
+
+function ReminderSelect({
+  value,
+  hasDueDate,
+  onChange,
+}: {
+  value: ReminderMinutes | null;
+  hasDueDate: boolean;
+  onChange: (minutes: ReminderMinutes | null) => void;
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.9rem', color: '#374151' }}>
+        Reminder
+        <select
+          value={value ?? ''}
+          disabled={!hasDueDate}
+          onChange={(e) => onChange(e.target.value ? (Number(e.target.value) as ReminderMinutes) : null)}
+          style={{ padding: '0.4rem 0.6rem', borderRadius: '0.75rem', border: '1px solid #d1d5db' }}
+        >
+          <option value="">None</option>
+          {REMINDER_OPTIONS.map((minutes) => (
+            <option key={minutes} value={minutes}>
+              {REMINDER_LABELS[minutes]} before
+            </option>
+          ))}
+        </select>
+      </label>
+      {!hasDueDate ? <span style={{ fontSize: '0.75rem', color: '#9ca3af' }}>Set a due date to enable reminders</span> : null}
+    </div>
+  );
+}
+
+function NotificationToggle() {
+  const { permission, requestPermission } = useNotifications();
+  const enabled = permission === 'granted';
+
+  return (
+    <button
+      type="button"
+      onClick={requestPermission}
+      disabled={enabled}
+      style={{
+        padding: '0.6rem 1rem',
+        borderRadius: '0.75rem',
+        border: 'none',
+        cursor: enabled ? 'default' : 'pointer',
+        fontWeight: 600,
+        background: enabled ? '#dcfce7' : '#f97316',
+        color: enabled ? '#166534' : '#fff',
+      }}
+    >
+      {enabled ? '🔔 Notifications On' : '🔔 Enable Notifications'}
+    </button>
+  );
+}
+
 export default function TodoApp() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [title, setTitle] = useState('');
@@ -106,6 +195,7 @@ export default function TodoApp() {
   const [dueDate, setDueDate] = useState('');
   const [isRecurring, setIsRecurring] = useState(false);
   const [recurrencePattern, setRecurrencePattern] = useState<RecurrencePattern>('daily');
+  const [reminderMinutes, setReminderMinutes] = useState<ReminderMinutes | null>(null);
   const [error, setError] = useState('');
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -133,6 +223,7 @@ export default function TodoApp() {
       due_date: dueDate ? new Date(dueDate).toISOString() : null,
       is_recurring: isRecurring,
       recurrence_pattern: isRecurring ? recurrencePattern : null,
+      reminder_minutes: dueDate ? reminderMinutes : null,
     };
 
     try {
@@ -154,6 +245,7 @@ export default function TodoApp() {
       setDueDate('');
       setIsRecurring(false);
       setRecurrencePattern('daily');
+      setReminderMinutes(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create todo.');
     }
@@ -200,6 +292,7 @@ export default function TodoApp() {
     due_date: string | null;
     is_recurring: boolean;
     recurrence_pattern: RecurrencePattern | null;
+    reminder_minutes: ReminderMinutes | null;
   }) {
     if (!editingTodo) return;
 
@@ -223,6 +316,9 @@ export default function TodoApp() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <NotificationToggle />
+      </div>
       <div style={{ background: '#fff', borderRadius: '1rem', padding: '1.5rem', boxShadow: '0 8px 24px rgba(0,0,0,0.08)' }}>
         <h2 style={{ marginTop: 0 }}>Add a todo</h2>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
@@ -250,7 +346,10 @@ export default function TodoApp() {
             onChange={(e) => {
               const value = e.target.value;
               setDueDate(value);
-              if (!value) setIsRecurring(false);
+              if (!value) {
+                setIsRecurring(false);
+                setReminderMinutes(null);
+              }
             }}
             style={{ padding: '0.6rem 0.8rem', borderRadius: '0.75rem', border: '1px solid #d1d5db' }}
           />
@@ -270,6 +369,13 @@ export default function TodoApp() {
             hasDueDate={Boolean(dueDate)}
             onToggle={setIsRecurring}
             onPatternChange={setRecurrencePattern}
+          />
+        </div>
+        <div style={{ marginTop: '0.75rem' }}>
+          <ReminderSelect
+            value={reminderMinutes}
+            hasDueDate={Boolean(dueDate)}
+            onChange={setReminderMinutes}
           />
         </div>
         {error ? <p style={{ color: '#b91c1c', marginTop: '0.75rem' }}>{error}</p> : null}
@@ -335,6 +441,7 @@ function TodoSection({
                     {todo.priority}
                     {todo.due_date ? ` · due ${formatDueDate(todo.due_date)}` : ''}
                     {todo.is_recurring && todo.recurrence_pattern ? <RecurrenceBadge pattern={todo.recurrence_pattern} /> : null}
+                    {todo.reminder_minutes ? <ReminderBadge minutes={todo.reminder_minutes as ReminderMinutes} /> : null}
                   </span>
                 </div>
               </div>
@@ -367,6 +474,7 @@ function EditModal({
     due_date: string | null;
     is_recurring: boolean;
     recurrence_pattern: RecurrencePattern | null;
+    reminder_minutes: ReminderMinutes | null;
   }) => void;
 }) {
   const [title, setTitle] = useState(todo.title);
@@ -374,6 +482,7 @@ function EditModal({
   const [dueDate, setDueDate] = useState(todo.due_date ? todo.due_date.slice(0, 16) : '');
   const [isRecurring, setIsRecurring] = useState(Boolean(todo.is_recurring));
   const [recurrencePattern, setRecurrencePattern] = useState<RecurrencePattern>(todo.recurrence_pattern ?? 'daily');
+  const [reminderMinutes, setReminderMinutes] = useState<ReminderMinutes | null>((todo.reminder_minutes as ReminderMinutes) ?? null);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -417,17 +526,27 @@ function EditModal({
           onChange={(e) => {
             const value = e.target.value;
             setDueDate(value);
-            if (!value) setIsRecurring(false);
+            if (!value) {
+              setIsRecurring(false);
+              setReminderMinutes(null);
+            }
           }}
           style={{ width: '100%', padding: '0.6rem 0.8rem', borderRadius: '0.75rem', border: '1px solid #d1d5db', marginBottom: '1rem' }}
         />
-        <div style={{ marginBottom: '1.5rem' }}>
+        <div style={{ marginBottom: '1rem' }}>
           <RecurrenceFields
             isRecurring={isRecurring}
             pattern={recurrencePattern}
             hasDueDate={Boolean(dueDate)}
             onToggle={setIsRecurring}
             onPatternChange={setRecurrencePattern}
+          />
+        </div>
+        <div style={{ marginBottom: '1.5rem' }}>
+          <ReminderSelect
+            value={reminderMinutes}
+            hasDueDate={Boolean(dueDate)}
+            onChange={setReminderMinutes}
           />
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
@@ -443,6 +562,7 @@ function EditModal({
                 due_date: dueDate ? new Date(dueDate).toISOString() : null,
                 is_recurring: isRecurring,
                 recurrence_pattern: isRecurring ? recurrencePattern : null,
+                reminder_minutes: dueDate ? reminderMinutes : null,
               })
             }
             disabled={!title.trim() || (isRecurring && !dueDate)}
