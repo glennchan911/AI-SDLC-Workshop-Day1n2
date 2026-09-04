@@ -1,7 +1,9 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import type { Priority, RecurrencePattern, ReminderMinutes, Todo } from '@/lib/db';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import type { Priority, RecurrencePattern, ReminderMinutes, Subtask, Tag, Template, Todo } from '@/lib/db';
+import { applyFilters, DEFAULT_FILTER_STATE, isFilterActive, type FilterState } from '@/lib/filters';
+import { calculateProgress, formatProgressLabel } from '@/lib/subtasks';
 import { useNotifications } from '@/lib/hooks/useNotifications';
 
 const PRIORITY_ORDER: Record<Priority, number> = { high: 0, medium: 1, low: 2 };
@@ -199,15 +201,57 @@ export default function TodoApp() {
   const [error, setError] = useState('');
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [filter, setFilter] = useState<FilterState>(DEFAULT_FILTER_STATE);
+
+  const [subtasksByTodo, setSubtasksByTodo] = useState<Record<number, Subtask[]>>({});
+  const [tagsByTodo, setTagsByTodo] = useState<Record<number, Tag[]>>({});
+  const [allTags, setAllTags] = useState<Tag[]>([]);
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [isTagModalOpen, setIsTagModalOpen] = useState(false);
+  const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
+  const [templateSourceTodo, setTemplateSourceTodo] = useState<Todo | null>(null);
+
+  async function loadChildData(todoList: Todo[]) {
+    const subtaskEntries = await Promise.all(
+      todoList.map(async (todo) => {
+        const res = await fetch(`/api/todos/${todo.id}/subtasks`);
+        const data: Subtask[] = res.ok ? await res.json() : [];
+        return [todo.id, data] as const;
+      })
+    );
+    const tagEntries = await Promise.all(
+      todoList.map(async (todo) => {
+        const res = await fetch(`/api/todos/${todo.id}/tags`);
+        const data: Tag[] = res.ok ? await res.json() : [];
+        return [todo.id, data] as const;
+      })
+    );
+    setSubtasksByTodo(Object.fromEntries(subtaskEntries));
+    setTagsByTodo(Object.fromEntries(tagEntries));
+  }
+
+  async function loadTags() {
+    const res = await fetch('/api/tags');
+    if (res.ok) setAllTags(await res.json());
+  }
+
+  async function loadTemplates() {
+    const res = await fetch('/api/templates');
+    if (res.ok) setTemplates(await res.json());
+  }
 
   useEffect(() => {
     fetch('/api/todos')
       .then((res) => res.json())
-      .then((data: Todo[]) => setTodos(data))
+      .then(async (data: Todo[]) => {
+        setTodos(data);
+        await Promise.all([loadChildData(data), loadTags(), loadTemplates()]);
+      })
       .finally(() => setIsLoading(false));
   }, []);
 
-  const sections = useMemo(() => sectionTodos(todos, new Date()), [todos]);
+  const filteredTodos = useMemo(() => applyFilters(todos, filter), [todos, filter]);
+  const sections = useMemo(() => sectionTodos(filteredTodos, new Date()), [filteredTodos]);
 
   async function handleAddTodo() {
     const trimmedTitle = title.trim();
@@ -240,6 +284,8 @@ export default function TodoApp() {
 
       const saved: Todo = await res.json();
       setTodos((prev) => [...prev, saved]);
+      setSubtasksByTodo((prev) => ({ ...prev, [saved.id]: [] }));
+      setTagsByTodo((prev) => ({ ...prev, [saved.id]: [] }));
       setTitle('');
       setPriority('medium');
       setDueDate('');
@@ -314,6 +360,157 @@ export default function TodoApp() {
     }
   }
 
+  async function handleAddSubtask(todoId: number, subtaskTitle: string) {
+    const trimmed = subtaskTitle.trim();
+    if (!trimmed) return;
+
+    const res = await fetch(`/api/todos/${todoId}/subtasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: trimmed }),
+    });
+    if (!res.ok) {
+      setError('Could not add subtask.');
+      return;
+    }
+    const created: Subtask = await res.json();
+    setSubtasksByTodo((prev) => ({ ...prev, [todoId]: [...(prev[todoId] ?? []), created] }));
+  }
+
+  async function handleToggleSubtask(todoId: number, subtask: Subtask) {
+    const nextCompleted = subtask.completed ? 0 : 1;
+    setSubtasksByTodo((prev) => ({
+      ...prev,
+      [todoId]: (prev[todoId] ?? []).map((s) => (s.id === subtask.id ? { ...s, completed: nextCompleted } : s)),
+    }));
+
+    const res = await fetch(`/api/subtasks/${subtask.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ completed: Boolean(nextCompleted) }),
+    });
+    if (!res.ok) {
+      setSubtasksByTodo((prev) => ({
+        ...prev,
+        [todoId]: (prev[todoId] ?? []).map((s) => (s.id === subtask.id ? subtask : s)),
+      }));
+      setError('Could not update subtask.');
+    }
+  }
+
+  async function handleDeleteSubtask(todoId: number, subtaskId: number) {
+    const previous = subtasksByTodo[todoId] ?? [];
+    setSubtasksByTodo((prev) => ({ ...prev, [todoId]: previous.filter((s) => s.id !== subtaskId) }));
+
+    const res = await fetch(`/api/subtasks/${subtaskId}`, { method: 'DELETE' });
+    if (!res.ok) {
+      setSubtasksByTodo((prev) => ({ ...prev, [todoId]: previous }));
+      setError('Could not delete subtask.');
+    }
+  }
+
+  async function handleCreateTag(name: string, color: string) {
+    const res = await fetch('/api/tags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, color }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setError(data.error ?? 'Could not create tag.');
+      return;
+    }
+    const created: Tag = await res.json();
+    setAllTags((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+  }
+
+  async function handleDeleteTag(tagId: number) {
+    const res = await fetch(`/api/tags/${tagId}`, { method: 'DELETE' });
+    if (!res.ok) {
+      setError('Could not delete tag.');
+      return;
+    }
+    setAllTags((prev) => prev.filter((t) => t.id !== tagId));
+    setTagsByTodo((prev) => {
+      const next: Record<number, Tag[]> = {};
+      for (const [todoId, tags] of Object.entries(prev)) {
+        next[Number(todoId)] = tags.filter((t) => t.id !== tagId);
+      }
+      return next;
+    });
+  }
+
+  async function handleAssignTag(todoId: number, tagId: number) {
+    const res = await fetch(`/api/todos/${todoId}/tags`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tag_id: tagId }),
+    });
+    if (!res.ok) {
+      setError('Could not assign tag.');
+      return;
+    }
+    const updatedTags: Tag[] = await res.json();
+    setTagsByTodo((prev) => ({ ...prev, [todoId]: updatedTags }));
+  }
+
+  async function handleRemoveTag(todoId: number, tagId: number) {
+    const res = await fetch(`/api/todos/${todoId}/tags`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tag_id: tagId }),
+    });
+    if (!res.ok) {
+      setError('Could not remove tag.');
+      return;
+    }
+    const updatedTags: Tag[] = await res.json();
+    setTagsByTodo((prev) => ({ ...prev, [todoId]: updatedTags }));
+  }
+
+  async function handleSaveTemplate(sourceTodo: Todo, offsetDays: number) {
+    const subtasks = subtasksByTodo[sourceTodo.id] ?? [];
+    const res = await fetch('/api/templates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: sourceTodo.title,
+        priority: sourceTodo.priority,
+        offset_days: offsetDays,
+        subtasks: subtasks.map((s) => ({ title: s.title })),
+      }),
+    });
+    if (!res.ok) {
+      setError('Could not save template.');
+      return;
+    }
+    const created: Template = await res.json();
+    setTemplates((prev) => [created, ...prev]);
+    setTemplateSourceTodo(null);
+  }
+
+  async function handleUseTemplate(template: Template) {
+    const res = await fetch(`/api/templates/${template.id}/use`, { method: 'POST' });
+    if (!res.ok) {
+      setError('Could not create todo from template.');
+      return;
+    }
+    const { todo: newTodo, subtasks }: { todo: Todo; subtasks: Subtask[] } = await res.json();
+    setTodos((prev) => [...prev, newTodo]);
+    setSubtasksByTodo((prev) => ({ ...prev, [newTodo.id]: subtasks }));
+    setTagsByTodo((prev) => ({ ...prev, [newTodo.id]: [] }));
+  }
+
+  async function handleDeleteTemplate(templateId: number) {
+    const res = await fetch(`/api/templates/${templateId}`, { method: 'DELETE' });
+    if (!res.ok) {
+      setError('Could not delete template.');
+      return;
+    }
+    setTemplates((prev) => prev.filter((t) => t.id !== templateId));
+  }
+
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -381,13 +578,80 @@ export default function TodoApp() {
         {error ? <p style={{ color: '#b91c1c', marginTop: '0.75rem' }}>{error}</p> : null}
       </div>
 
+      <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          onClick={() => setIsTagModalOpen(true)}
+          style={{ background: '#fff', color: '#111827', padding: '0.6rem 1rem', borderRadius: '0.75rem', border: '1px solid #d1d5db', cursor: 'pointer' }}
+        >
+          Manage Tags
+        </button>
+        <button
+          type="button"
+          onClick={() => setIsTemplateModalOpen(true)}
+          style={{ background: '#fff', color: '#111827', padding: '0.6rem 1rem', borderRadius: '0.75rem', border: '1px solid #d1d5db', cursor: 'pointer' }}
+        >
+          Templates
+        </button>
+      </div>
+
+      <FilterBar filter={filter} onChange={setFilter} />
+
       {isLoading ? (
         <p>Loading todos...</p>
       ) : (
         <>
-          <TodoSection title="Overdue" color="#b91c1c" todos={sections.overdue} onToggle={handleToggle} onEdit={setEditingTodo} onDelete={handleDelete} />
-          <TodoSection title="Active" color="#374151" todos={sections.active} onToggle={handleToggle} onEdit={setEditingTodo} onDelete={handleDelete} />
-          <TodoSection title="Completed" color="#065f46" todos={sections.completed} onToggle={handleToggle} onEdit={setEditingTodo} onDelete={handleDelete} />
+          <TodoSection
+            title="Overdue"
+            color="#b91c1c"
+            todos={sections.overdue}
+            onToggle={handleToggle}
+            onEdit={setEditingTodo}
+            onDelete={handleDelete}
+            subtasksByTodo={subtasksByTodo}
+            tagsByTodo={tagsByTodo}
+            allTags={allTags}
+            onAddSubtask={handleAddSubtask}
+            onToggleSubtask={handleToggleSubtask}
+            onDeleteSubtask={handleDeleteSubtask}
+            onAssignTag={handleAssignTag}
+            onRemoveTag={handleRemoveTag}
+            onSaveAsTemplate={setTemplateSourceTodo}
+          />
+          <TodoSection
+            title="Active"
+            color="#374151"
+            todos={sections.active}
+            onToggle={handleToggle}
+            onEdit={setEditingTodo}
+            onDelete={handleDelete}
+            subtasksByTodo={subtasksByTodo}
+            tagsByTodo={tagsByTodo}
+            allTags={allTags}
+            onAddSubtask={handleAddSubtask}
+            onToggleSubtask={handleToggleSubtask}
+            onDeleteSubtask={handleDeleteSubtask}
+            onAssignTag={handleAssignTag}
+            onRemoveTag={handleRemoveTag}
+            onSaveAsTemplate={setTemplateSourceTodo}
+          />
+          <TodoSection
+            title="Completed"
+            color="#065f46"
+            todos={sections.completed}
+            onToggle={handleToggle}
+            onEdit={setEditingTodo}
+            onDelete={handleDelete}
+            subtasksByTodo={subtasksByTodo}
+            tagsByTodo={tagsByTodo}
+            allTags={allTags}
+            onAddSubtask={handleAddSubtask}
+            onToggleSubtask={handleToggleSubtask}
+            onDeleteSubtask={handleDeleteSubtask}
+            onAssignTag={handleAssignTag}
+            onRemoveTag={handleRemoveTag}
+            onSaveAsTemplate={setTemplateSourceTodo}
+          />
         </>
       )}
 
@@ -397,6 +661,137 @@ export default function TodoApp() {
           onCancel={() => setEditingTodo(null)}
           onSave={handleSaveEdit}
         />
+      ) : null}
+
+      {isTagModalOpen ? (
+        <TagModal
+          tags={allTags}
+          onClose={() => setIsTagModalOpen(false)}
+          onCreate={handleCreateTag}
+          onDelete={handleDeleteTag}
+        />
+      ) : null}
+
+      {isTemplateModalOpen ? (
+        <TemplateModal
+          templates={templates}
+          onClose={() => setIsTemplateModalOpen(false)}
+          onUse={handleUseTemplate}
+          onDelete={handleDeleteTemplate}
+        />
+      ) : null}
+
+      {templateSourceTodo ? (
+        <SaveTemplateModal
+          todo={templateSourceTodo}
+          onCancel={() => setTemplateSourceTodo(null)}
+          onSave={(offsetDays) => handleSaveTemplate(templateSourceTodo, offsetDays)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function FilterBar({
+  filter,
+  onChange,
+}: {
+  filter: FilterState;
+  onChange: (filter: FilterState) => void;
+}) {
+  const chipStyle: CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '0.4rem',
+    background: '#e0e7ff',
+    color: '#3730a3',
+    borderRadius: '999px',
+    padding: '0.25rem 0.75rem',
+    fontSize: '0.85rem',
+  };
+  const chipButtonStyle: CSSProperties = {
+    background: 'none',
+    border: 'none',
+    color: '#3730a3',
+    cursor: 'pointer',
+    fontWeight: 700,
+    padding: 0,
+  };
+
+  return (
+    <div style={{ background: '#fff', borderRadius: '1rem', padding: '1.5rem', boxShadow: '0 8px 24px rgba(0,0,0,0.08)' }}>
+      <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+        <input
+          placeholder="Search todos"
+          value={filter.query}
+          onChange={(e) => onChange({ ...filter, query: e.target.value })}
+          style={{ flex: '1 1 12rem', padding: '0.6rem 0.8rem', borderRadius: '0.75rem', border: '1px solid #d1d5db' }}
+        />
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+          <span style={{ fontSize: '0.85rem', color: '#4b5563' }}>Priority</span>
+          <select
+            aria-label="Filter by priority"
+            value={filter.priority}
+            onChange={(e) => onChange({ ...filter, priority: e.target.value as FilterState['priority'] })}
+            style={{ padding: '0.6rem 0.8rem', borderRadius: '0.75rem', border: '1px solid #d1d5db' }}
+          >
+            <option value="all">All</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+          <span style={{ fontSize: '0.85rem', color: '#4b5563' }}>Status</span>
+          <select
+            aria-label="Filter by status"
+            value={filter.status}
+            onChange={(e) => onChange({ ...filter, status: e.target.value as FilterState['status'] })}
+            style={{ padding: '0.6rem 0.8rem', borderRadius: '0.75rem', border: '1px solid #d1d5db' }}
+          >
+            <option value="all">All</option>
+            <option value="active">Active</option>
+            <option value="completed">Completed</option>
+          </select>
+        </label>
+        {isFilterActive(filter) ? (
+          <button
+            type="button"
+            onClick={() => onChange(DEFAULT_FILTER_STATE)}
+            style={{ background: '#111827', color: '#fff', padding: '0.5rem 1rem', borderRadius: '0.75rem', border: 'none', cursor: 'pointer' }}
+          >
+            Clear all filters
+          </button>
+        ) : null}
+      </div>
+
+      {isFilterActive(filter) ? (
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.75rem' }}>
+          {filter.query.trim() ? (
+            <span style={chipStyle}>
+              Text: {filter.query}
+              <button type="button" style={chipButtonStyle} onClick={() => onChange({ ...filter, query: '' })} aria-label="Clear text filter">
+                ×
+              </button>
+            </span>
+          ) : null}
+          {filter.priority !== 'all' ? (
+            <span style={chipStyle}>
+              Priority: {filter.priority}
+              <button type="button" style={chipButtonStyle} onClick={() => onChange({ ...filter, priority: 'all' })} aria-label="Clear priority filter">
+                Clear priority ×
+              </button>
+            </span>
+          ) : null}
+          {filter.status !== 'all' ? (
+            <span style={chipStyle}>
+              Status: {filter.status}
+              <button type="button" style={chipButtonStyle} onClick={() => onChange({ ...filter, status: 'all' })} aria-label="Clear status filter">
+                Clear status ×
+              </button>
+            </span>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );
@@ -409,6 +804,15 @@ function TodoSection({
   onToggle,
   onEdit,
   onDelete,
+  subtasksByTodo,
+  tagsByTodo,
+  allTags,
+  onAddSubtask,
+  onToggleSubtask,
+  onDeleteSubtask,
+  onAssignTag,
+  onRemoveTag,
+  onSaveAsTemplate,
 }: {
   title: string;
   color: string;
@@ -416,6 +820,15 @@ function TodoSection({
   onToggle: (todo: Todo) => void;
   onEdit: (todo: Todo) => void;
   onDelete: (id: number) => void;
+  subtasksByTodo: Record<number, Subtask[]>;
+  tagsByTodo: Record<number, Tag[]>;
+  allTags: Tag[];
+  onAddSubtask: (todoId: number, title: string) => void;
+  onToggleSubtask: (todoId: number, subtask: Subtask) => void;
+  onDeleteSubtask: (todoId: number, subtaskId: number) => void;
+  onAssignTag: (todoId: number, tagId: number) => void;
+  onRemoveTag: (todoId: number, tagId: number) => void;
+  onSaveAsTemplate: (todo: Todo) => void;
 }) {
   return (
     <div style={{ background: '#fff', borderRadius: '1rem', padding: '1.5rem', boxShadow: '0 8px 24px rgba(0,0,0,0.08)' }}>
@@ -427,36 +840,190 @@ function TodoSection({
       ) : (
         <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
           {todos.map((todo) => (
-            <li key={todo.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', border: '1px solid #e5e7eb', borderRadius: '0.75rem', padding: '0.75rem 1rem' }}>
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
-                <input
-                  type="checkbox"
-                  checked={Boolean(todo.completed)}
-                  onChange={() => onToggle(todo)}
-                  aria-label={`Mark "${todo.title}" as ${todo.completed ? 'incomplete' : 'complete'}`}
-                />
-                <div>
-                  <p style={{ margin: 0, fontWeight: 600, textDecoration: todo.completed ? 'line-through' : 'none' }}>{todo.title}</p>
-                  <span style={{ fontSize: '0.85rem', color: '#6b7280', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
-                    {todo.priority}
-                    {todo.due_date ? ` · due ${formatDueDate(todo.due_date)}` : ''}
-                    {todo.is_recurring && todo.recurrence_pattern ? <RecurrenceBadge pattern={todo.recurrence_pattern} /> : null}
-                    {todo.reminder_minutes ? <ReminderBadge minutes={todo.reminder_minutes as ReminderMinutes} /> : null}
-                  </span>
+            <li key={todo.id} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', border: '1px solid #e5e7eb', borderRadius: '0.75rem', padding: '0.75rem 1rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(todo.completed)}
+                    onChange={() => onToggle(todo)}
+                    aria-label={`Mark "${todo.title}" as ${todo.completed ? 'incomplete' : 'complete'}`}
+                  />
+                  <div>
+                    <p style={{ margin: 0, fontWeight: 600, textDecoration: todo.completed ? 'line-through' : 'none' }}>{todo.title}</p>
+                    <span style={{ fontSize: '0.85rem', color: '#6b7280', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+                      {todo.priority}
+                      {todo.due_date ? ` · due ${formatDueDate(todo.due_date)}` : ''}
+                      {todo.is_recurring && todo.recurrence_pattern ? <RecurrenceBadge pattern={todo.recurrence_pattern} /> : null}
+                      {todo.reminder_minutes ? <ReminderBadge minutes={todo.reminder_minutes as ReminderMinutes} /> : null}
+                    </span>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '0.75rem' }}>
+                  <button type="button" onClick={() => onSaveAsTemplate(todo)} style={{ color: '#7c3aed', background: 'none', border: 'none', cursor: 'pointer' }}>
+                    Save as Template
+                  </button>
+                  <button type="button" onClick={() => onEdit(todo)} style={{ color: '#1d4ed8', background: 'none', border: 'none', cursor: 'pointer' }}>
+                    Edit
+                  </button>
+                  <button type="button" onClick={() => onDelete(todo.id)} style={{ color: '#b91c1c', background: 'none', border: 'none', cursor: 'pointer' }}>
+                    Delete
+                  </button>
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: '0.75rem' }}>
-                <button type="button" onClick={() => onEdit(todo)} style={{ color: '#1d4ed8', background: 'none', border: 'none', cursor: 'pointer' }}>
-                  Edit
-                </button>
-                <button type="button" onClick={() => onDelete(todo.id)} style={{ color: '#b91c1c', background: 'none', border: 'none', cursor: 'pointer' }}>
-                  Delete
-                </button>
-              </div>
+
+              <TodoTags
+                todo={todo}
+                assignedTags={tagsByTodo[todo.id] ?? []}
+                allTags={allTags}
+                onAssignTag={onAssignTag}
+                onRemoveTag={onRemoveTag}
+              />
+
+              <TodoSubtasks
+                todo={todo}
+                subtasks={subtasksByTodo[todo.id] ?? []}
+                onAdd={onAddSubtask}
+                onToggle={onToggleSubtask}
+                onDelete={onDeleteSubtask}
+              />
             </li>
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+function TodoTags({
+  todo,
+  assignedTags,
+  allTags,
+  onAssignTag,
+  onRemoveTag,
+}: {
+  todo: Todo;
+  assignedTags: Tag[];
+  allTags: Tag[];
+  onAssignTag: (todoId: number, tagId: number) => void;
+  onRemoveTag: (todoId: number, tagId: number) => void;
+}) {
+  const unassignedTags = allTags.filter((tag) => !assignedTags.some((a) => a.id === tag.id));
+
+  return (
+    <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center', paddingLeft: '1.9rem' }}>
+      {assignedTags.map((tag) => (
+        <span
+          key={tag.id}
+          className="tag"
+          style={{ background: tag.color, color: '#fff', borderRadius: '999px', padding: '0.15rem 0.6rem', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+        >
+          <span>{tag.name}</span>
+          <button
+            type="button"
+            onClick={() => onRemoveTag(todo.id, tag.id)}
+            aria-label={`Remove tag ${tag.name} from ${todo.title}`}
+            style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontWeight: 700, padding: 0 }}
+          >
+            ×
+          </button>
+        </span>
+      ))}
+      {unassignedTags.length > 0 ? (
+        <select
+          aria-label={`Assign tag to ${todo.title}`}
+          value=""
+          onChange={(e) => {
+            if (e.target.value) onAssignTag(todo.id, Number(e.target.value));
+          }}
+          style={{ fontSize: '0.75rem', borderRadius: '999px', border: '1px solid #d1d5db', padding: '0.15rem 0.5rem' }}
+        >
+          <option value="">+ Add tag</option>
+          {unassignedTags.map((tag) => (
+            <option key={tag.id} value={tag.id}>
+              {tag.name}
+            </option>
+          ))}
+        </select>
+      ) : null}
+    </div>
+  );
+}
+
+function TodoSubtasks({
+  todo,
+  subtasks,
+  onAdd,
+  onToggle,
+  onDelete,
+}: {
+  todo: Todo;
+  subtasks: Subtask[];
+  onAdd: (todoId: number, title: string) => void;
+  onToggle: (todoId: number, subtask: Subtask) => void;
+  onDelete: (todoId: number, subtaskId: number) => void;
+}) {
+  const [newSubtask, setNewSubtask] = useState('');
+  const progress = calculateProgress(subtasks);
+
+  return (
+    <div style={{ paddingLeft: '1.9rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+      {subtasks.length > 0 ? (
+        <>
+          <div style={{ height: '0.4rem', background: '#e5e7eb', borderRadius: '999px', overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${progress.percent}%`, background: '#10b981' }} />
+          </div>
+          <span style={{ fontSize: '0.8rem', color: '#4b5563' }}>{formatProgressLabel(progress)}</span>
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+            {subtasks.map((subtask) => (
+              <li key={subtask.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(subtask.completed)}
+                  onChange={() => onToggle(todo.id, subtask)}
+                  aria-label={`Mark subtask "${subtask.title}" as ${subtask.completed ? 'incomplete' : 'complete'}`}
+                />
+                <span style={{ fontSize: '0.85rem', textDecoration: subtask.completed ? 'line-through' : 'none' }}>{subtask.title}</span>
+                <button
+                  type="button"
+                  onClick={() => onDelete(todo.id, subtask.id)}
+                  aria-label={`Delete subtask ${subtask.title}`}
+                  style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#b91c1c', cursor: 'pointer', fontSize: '0.8rem' }}
+                >
+                  Delete
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+      <div style={{ display: 'flex', gap: '0.4rem' }}>
+        <input
+          placeholder="Add subtask"
+          value={newSubtask}
+          onChange={(e) => setNewSubtask(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && newSubtask.trim()) {
+              onAdd(todo.id, newSubtask);
+              setNewSubtask('');
+            }
+          }}
+          style={{ flex: '1 1 auto', fontSize: '0.85rem', padding: '0.3rem 0.6rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
+        />
+        <button
+          type="button"
+          onClick={() => {
+            if (newSubtask.trim()) {
+              onAdd(todo.id, newSubtask);
+              setNewSubtask('');
+            }
+          }}
+          disabled={!newSubtask.trim()}
+          style={{ fontSize: '0.85rem', padding: '0.3rem 0.8rem', borderRadius: '0.5rem', border: 'none', background: '#111827', color: '#fff', cursor: 'pointer' }}
+        >
+          Add subtask
+        </button>
+      </div>
     </div>
   );
 }
@@ -569,6 +1136,170 @@ function EditModal({
             style={{ padding: '0.6rem 1.2rem', borderRadius: '0.75rem', border: 'none', background: '#111827', color: '#fff', cursor: 'pointer' }}
           >
             Update
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TagModal({
+  tags,
+  onClose,
+  onCreate,
+  onDelete,
+}: {
+  tags: Tag[];
+  onClose: () => void;
+  onCreate: (name: string, color: string) => void;
+  onDelete: (tagId: number) => void;
+}) {
+  const [name, setName] = useState('');
+  const [color, setColor] = useState('#2563eb');
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'grid', placeItems: 'center', zIndex: 50 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: '1rem', padding: '1.5rem', width: '100%', maxWidth: '28rem' }}>
+        <h3 style={{ marginTop: 0 }}>Manage Tags</h3>
+
+        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+          <input
+            placeholder="Tag name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            style={{ flex: '1 1 auto', padding: '0.5rem 0.7rem', borderRadius: '0.5rem', border: '1px solid #d1d5db' }}
+          />
+          <input
+            type="color"
+            value={color}
+            onChange={(e) => setColor(e.target.value)}
+            style={{ width: '2.5rem', padding: 0, border: '1px solid #d1d5db', borderRadius: '0.5rem' }}
+          />
+          <button
+            type="button"
+            onClick={() => {
+              if (name.trim()) {
+                onCreate(name, color);
+                setName('');
+              }
+            }}
+            disabled={!name.trim()}
+            style={{ padding: '0.5rem 1rem', borderRadius: '0.5rem', border: 'none', background: '#111827', color: '#fff', cursor: 'pointer' }}
+          >
+            Create Tag
+          </button>
+        </div>
+
+        <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '16rem', overflowY: 'auto' }}>
+          {tags.map((tag) => (
+            <li key={tag.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span style={{ width: '0.9rem', height: '0.9rem', borderRadius: '50%', background: tag.color, display: 'inline-block' }} />
+                {tag.name}
+              </span>
+              <button type="button" onClick={() => onDelete(tag.id)} style={{ color: '#b91c1c', background: 'none', border: 'none', cursor: 'pointer' }}>
+                Delete
+              </button>
+            </li>
+          ))}
+          {tags.length === 0 ? <p style={{ color: '#9ca3af' }}>No tags yet.</p> : null}
+        </ul>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
+          <button type="button" onClick={onClose} style={{ padding: '0.6rem 1.2rem', borderRadius: '0.75rem', border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer' }}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TemplateModal({
+  templates,
+  onClose,
+  onUse,
+  onDelete,
+}: {
+  templates: Template[];
+  onClose: () => void;
+  onUse: (template: Template) => void;
+  onDelete: (templateId: number) => void;
+}) {
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'grid', placeItems: 'center', zIndex: 50 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: '1rem', padding: '1.5rem', width: '100%', maxWidth: '28rem' }}>
+        <h3 style={{ marginTop: 0 }}>Templates</h3>
+
+        <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '20rem', overflowY: 'auto' }}>
+          {templates.map((template) => (
+            <li key={template.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', border: '1px solid #e5e7eb', borderRadius: '0.5rem', padding: '0.6rem 0.8rem' }}>
+              <div>
+                <p style={{ margin: 0, fontWeight: 600 }}>{template.title}</p>
+                <span style={{ fontSize: '0.8rem', color: '#6b7280' }}>
+                  {template.priority} · due in {template.offset_days}d
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button
+                  type="button"
+                  onClick={() => onUse(template)}
+                  style={{ padding: '0.4rem 0.8rem', borderRadius: '0.5rem', border: 'none', background: '#111827', color: '#fff', cursor: 'pointer' }}
+                >
+                  Use Template
+                </button>
+                <button type="button" onClick={() => onDelete(template.id)} style={{ color: '#b91c1c', background: 'none', border: 'none', cursor: 'pointer' }}>
+                  Delete
+                </button>
+              </div>
+            </li>
+          ))}
+          {templates.length === 0 ? <p style={{ color: '#9ca3af' }}>No templates yet. Save one from a todo.</p> : null}
+        </ul>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
+          <button type="button" onClick={onClose} style={{ padding: '0.6rem 1.2rem', borderRadius: '0.75rem', border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer' }}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SaveTemplateModal({
+  todo,
+  onCancel,
+  onSave,
+}: {
+  todo: Todo;
+  onCancel: () => void;
+  onSave: (offsetDays: number) => void;
+}) {
+  const [offsetDays, setOffsetDays] = useState(0);
+
+  return (
+    <div onClick={onCancel} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'grid', placeItems: 'center', zIndex: 50 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: '1rem', padding: '1.5rem', width: '100%', maxWidth: '24rem' }}>
+        <h3 style={{ marginTop: 0 }}>Save &quot;{todo.title}&quot; as Template</h3>
+        <label htmlFor="template-offset-days" style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>Due date offset (days from use)</label>
+        <input
+          id="template-offset-days"
+          type="number"
+          value={offsetDays}
+          onChange={(e) => setOffsetDays(Number(e.target.value))}
+          style={{ width: '100%', padding: '0.6rem 0.8rem', borderRadius: '0.75rem', border: '1px solid #d1d5db', marginBottom: '1.5rem' }}
+        />
+        <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+          <button type="button" onClick={onCancel} style={{ padding: '0.6rem 1.2rem', borderRadius: '0.75rem', border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer' }}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => onSave(offsetDays)}
+            style={{ padding: '0.6rem 1.2rem', borderRadius: '0.75rem', border: 'none', background: '#111827', color: '#fff', cursor: 'pointer' }}
+          >
+            Save Template
           </button>
         </div>
       </div>

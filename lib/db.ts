@@ -4,6 +4,7 @@ import path from 'node:path';
 const db = new Database(path.join(process.cwd(), 'todos.db'));
 
 db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -40,6 +41,48 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_todos_user_id ON todos(user_id);
   CREATE INDEX IF NOT EXISTS idx_todos_due_date ON todos(due_date);
+
+  CREATE TABLE IF NOT EXISTS subtasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    todo_id INTEGER NOT NULL REFERENCES todos(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    completed INTEGER NOT NULL DEFAULT 0,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_subtasks_todo_id ON subtasks(todo_id);
+
+  CREATE TABLE IF NOT EXISTS tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL DEFAULT '#6b7280',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(user_id, name)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_tags_user_id ON tags(user_id);
+
+  CREATE TABLE IF NOT EXISTS todo_tags (
+    todo_id INTEGER NOT NULL REFERENCES todos(id) ON DELETE CASCADE,
+    tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    PRIMARY KEY (todo_id, tag_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_todo_tags_tag_id ON todo_tags(tag_id);
+
+  CREATE TABLE IF NOT EXISTS templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    priority TEXT NOT NULL DEFAULT 'medium',
+    offset_days INTEGER NOT NULL DEFAULT 0,
+    subtasks_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_templates_user_id ON templates(user_id);
 `);
 
 export type Priority = 'high' | 'medium' | 'low';
@@ -87,6 +130,34 @@ export interface Todo {
   created_at: string;
   updated_at: string | null;
 }
+
+export interface Subtask {
+  id: number;
+  todo_id: number;
+  title: string;
+  completed: number;
+  position: number;
+  created_at: string;
+}
+
+export interface Tag {
+  id: number;
+  user_id: number;
+  name: string;
+  color: string;
+  created_at: string;
+}
+
+export interface Template {
+  id: number;
+  user_id: number;
+  title: string;
+  priority: Priority;
+  offset_days: number;
+  subtasks_json: string;
+  created_at: string;
+}
+
 
 export const userDB = {
   findById(id: number) {
@@ -217,6 +288,150 @@ export const todoDB = {
         AND last_notification_sent IS NULL
         AND datetime(due_date, '-' || reminder_minutes || ' minutes') <= datetime(?)
     `).all(userId, now) as Todo[];
+  },
+};
+
+export const subtaskDB = {
+  listByTodo(todoId: number) {
+    return db.prepare('SELECT * FROM subtasks WHERE todo_id = ? ORDER BY position ASC, id ASC').all(todoId) as Subtask[];
+  },
+  getById(id: number) {
+    return db.prepare('SELECT * FROM subtasks WHERE id = ?').get(id) as Subtask | undefined;
+  },
+  create(todoId: number, title: string) {
+    const row = db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS nextPosition FROM subtasks WHERE todo_id = ?').get(todoId) as { nextPosition: number };
+    const result = db.prepare('INSERT INTO subtasks (todo_id, title, position) VALUES (?, ?, ?)').run(todoId, title, row.nextPosition);
+    return this.getById(Number(result.lastInsertRowid));
+  },
+  update(id: number, patch: Partial<Subtask>) {
+    const existing = this.getById(id);
+    if (!existing) {
+      return undefined;
+    }
+
+    const fields: Array<keyof Subtask> = ['title', 'completed', 'position'];
+    const setClauses: string[] = [];
+    const values: unknown[] = [];
+
+    for (const field of fields) {
+      if (Object.prototype.hasOwnProperty.call(patch, field)) {
+        setClauses.push(`${field} = ?`);
+        values.push(patch[field]);
+      }
+    }
+
+    if (setClauses.length === 0) {
+      return existing;
+    }
+
+    values.push(id);
+    db.prepare(`UPDATE subtasks SET ${setClauses.join(', ')} WHERE id = ?`).run(...values);
+    return this.getById(id);
+  },
+  delete(id: number) {
+    const result = db.prepare('DELETE FROM subtasks WHERE id = ?').run(id);
+    return result.changes > 0;
+  },
+};
+
+export const tagDB = {
+  list(userId: number) {
+    return db.prepare('SELECT * FROM tags WHERE user_id = ? ORDER BY name ASC').all(userId) as Tag[];
+  },
+  getById(id: number) {
+    return db.prepare('SELECT * FROM tags WHERE id = ?').get(id) as Tag | undefined;
+  },
+  findByUserAndId(userId: number, id: number) {
+    return db.prepare('SELECT * FROM tags WHERE id = ? AND user_id = ?').get(id, userId) as Tag | undefined;
+  },
+  create(userId: number, name: string, color: string) {
+    const result = db.prepare('INSERT INTO tags (user_id, name, color) VALUES (?, ?, ?)').run(userId, name, color);
+    return this.getById(Number(result.lastInsertRowid));
+  },
+  update(id: number, patch: Partial<Tag>) {
+    const existing = this.getById(id);
+    if (!existing) {
+      return undefined;
+    }
+
+    const fields: Array<keyof Tag> = ['name', 'color'];
+    const setClauses: string[] = [];
+    const values: unknown[] = [];
+
+    for (const field of fields) {
+      if (Object.prototype.hasOwnProperty.call(patch, field)) {
+        setClauses.push(`${field} = ?`);
+        values.push(patch[field]);
+      }
+    }
+
+    if (setClauses.length === 0) {
+      return existing;
+    }
+
+    values.push(id);
+    db.prepare(`UPDATE tags SET ${setClauses.join(', ')} WHERE id = ?`).run(...values);
+    return this.getById(id);
+  },
+  delete(id: number) {
+    const result = db.prepare('DELETE FROM tags WHERE id = ?').run(id);
+    return result.changes > 0;
+  },
+  listForTodo(todoId: number) {
+    return db
+      .prepare('SELECT tags.* FROM tags INNER JOIN todo_tags ON todo_tags.tag_id = tags.id WHERE todo_tags.todo_id = ? ORDER BY tags.name ASC')
+      .all(todoId) as Tag[];
+  },
+  assignToTodo(todoId: number, tagId: number) {
+    db.prepare('INSERT OR IGNORE INTO todo_tags (todo_id, tag_id) VALUES (?, ?)').run(todoId, tagId);
+  },
+  removeFromTodo(todoId: number, tagId: number) {
+    const result = db.prepare('DELETE FROM todo_tags WHERE todo_id = ? AND tag_id = ?').run(todoId, tagId);
+    return result.changes > 0;
+  },
+};
+
+export const templateDB = {
+  list(userId: number) {
+    return db.prepare('SELECT * FROM templates WHERE user_id = ? ORDER BY created_at DESC').all(userId) as Template[];
+  },
+  getById(userId: number, id: number) {
+    return db.prepare('SELECT * FROM templates WHERE id = ? AND user_id = ?').get(id, userId) as Template | undefined;
+  },
+  create(userId: number, payload: { title: string; priority: Priority; offset_days: number; subtasks_json: string }) {
+    const result = db
+      .prepare('INSERT INTO templates (user_id, title, priority, offset_days, subtasks_json) VALUES (?, ?, ?, ?, ?)')
+      .run(userId, payload.title, payload.priority, payload.offset_days, payload.subtasks_json);
+    return this.getById(userId, Number(result.lastInsertRowid));
+  },
+  update(userId: number, id: number, patch: Partial<Template>) {
+    const existing = this.getById(userId, id);
+    if (!existing) {
+      return undefined;
+    }
+
+    const fields: Array<keyof Template> = ['title', 'priority', 'offset_days', 'subtasks_json'];
+    const setClauses: string[] = [];
+    const values: unknown[] = [];
+
+    for (const field of fields) {
+      if (Object.prototype.hasOwnProperty.call(patch, field)) {
+        setClauses.push(`${field} = ?`);
+        values.push(patch[field]);
+      }
+    }
+
+    if (setClauses.length === 0) {
+      return existing;
+    }
+
+    values.push(id, userId);
+    db.prepare(`UPDATE templates SET ${setClauses.join(', ')} WHERE id = ? AND user_id = ?`).run(...values);
+    return this.getById(userId, id);
+  },
+  delete(userId: number, id: number) {
+    const result = db.prepare('DELETE FROM templates WHERE id = ? AND user_id = ?').run(id, userId);
+    return result.changes > 0;
   },
 };
 

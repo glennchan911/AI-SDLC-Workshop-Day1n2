@@ -1,6 +1,6 @@
 # Subtasks, Tags & Templates Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Expand the todo model with child-work tracking, tag-based organization, and reusable templates while keeping all child records scoped to the authenticated user.
 
@@ -28,7 +28,7 @@
 - Consumes: todo id from the base route
 - Produces: subtask CRUD plus progress calculation for display bars
 
-- [ ] **Step 1: Add failing subtask tests**
+- [x] **Step 1: Add failing subtask tests**
 
 ```ts
 test('user can add multiple subtasks and see progress updates', async ({ page }) => {
@@ -39,7 +39,7 @@ test('user can add multiple subtasks and see progress updates', async ({ page })
 
 Expected: tests fail before the routes and UI exist.
 
-- [ ] **Step 2: Implement the DB layer and API routes**
+- [x] **Step 2: Implement the DB layer and API routes**
 
 ```ts
 export const subtaskDB = {
@@ -52,7 +52,7 @@ export const subtaskDB = {
 
 Expected: subtask records are created and updated in a user-safe, todo-scoped way.
 
-- [ ] **Step 3: Add progress UI**
+- [x] **Step 3: Add progress UI**
 
 ```ts
 const progress = (completed / total) * 100;
@@ -60,7 +60,7 @@ const progress = (completed / total) * 100;
 
 Expected: progress bars and completion counters update in real time as subtasks change state.
 
-- [ ] **Step 4: Run subtask verification**
+- [x] **Step 4: Run subtask verification**
 
 Run: `npx playwright test tests/05-subtasks-progress.spec.ts`
 Expected: add/edit/check/delete flows pass and progress values are accurate.
@@ -76,7 +76,7 @@ Expected: add/edit/check/delete flows pass and progress values are accurate.
 - Consumes: tag list and todo id from the main page
 - Produces: tag CRUD actions, assign/remove from todo, filtering by tag
 
-- [ ] **Step 1: Add failing tag tests**
+- [x] **Step 1: Add failing tag tests**
 
 ```ts
 test('can manage tags and assign multiple tags to a todo', async ({ page }) => {
@@ -87,7 +87,7 @@ test('can manage tags and assign multiple tags to a todo', async ({ page }) => {
 
 Expected: tag creation and assignment do not exist before implementation.
 
-- [ ] **Step 2: Implement tag DB and API routes**
+- [x] **Step 2: Implement tag DB and API routes**
 
 ```ts
 export const tagDB = {
@@ -100,7 +100,7 @@ export const tagDB = {
 
 Expected: tags are unique per user and removing a tag removes its join rows from todos.
 
-- [ ] **Step 3: Add UI modal and todo-badge assignment**
+- [x] **Step 3: Add UI modal and todo-badge assignment**
 
 ```tsx
 {todo.tags?.map(tag => <span key={tag.id} className="tag" style={{ background: tag.color }}>{tag.name}</span>)}
@@ -108,7 +108,7 @@ Expected: tags are unique per user and removing a tag removes its join rows from
 
 Expected: Manage Tags modal supports create/edit/delete and todo forms support multiple tag selection.
 
-- [ ] **Step 4: Run tag verification**
+- [x] **Step 4: Run tag verification**
 
 Run: `npx playwright test tests/06-tag-system.spec.ts`
 Expected: all tag-related CRUD behaviors and filter interactions pass.
@@ -124,7 +124,7 @@ Expected: all tag-related CRUD behaviors and filter interactions pass.
 - Consumes: todo metadata and serialized subtask arrays
 - Produces: reusable template creation + application to make new todos from a pattern
 
-- [ ] **Step 1: Add failing template tests**
+- [x] **Step 1: Add failing template tests**
 
 ```ts
 test('template can create a todo with subtasks and due offset', async ({ page }) => {
@@ -134,7 +134,7 @@ test('template can create a todo with subtasks and due offset', async ({ page })
 
 Expected: tests fail until templates exist.
 
-- [ ] **Step 2: Implement template DB and JSON serialization**
+- [x] **Step 2: Implement template DB and JSON serialization**
 
 ```ts
 const serialized = JSON.stringify(subtasks.map((s, index) => ({ title: s.title, position: index })));
@@ -142,7 +142,7 @@ const serialized = JSON.stringify(subtasks.map((s, index) => ({ title: s.title, 
 
 Expected: template payloads store their pattern in a consistent structure that can later be used to make a new todo.
 
-- [ ] **Step 3: Add `/use` logic and UI actions**
+- [x] **Step 3: Add `/use` logic and UI actions**
 
 ```ts
 const newTodo = todoDB.create(session.userId, {
@@ -154,7 +154,7 @@ const newTodo = todoDB.create(session.userId, {
 
 Expected: a template can generate a new todo with the right metadata and subtasks.
 
-- [ ] **Step 4: Run template verification**
+- [x] **Step 4: Run template verification**
 
 Run: `npx playwright test tests/07-template-system.spec.ts`
 Expected: all template CRUD and reuse flows pass.
@@ -164,3 +164,12 @@ Expected: all template CRUD and reuse flows pass.
 - Depends on: Steps 1 and 2
 - Enables: Search/Filtering, Export/Import, Calendar
 - Exit criteria: subtasks, tags, and templates all work on top of the todo model without interfering with one another.
+
+## Execution Notes
+
+- Implemented as planned: `subtasks`, `tags`, `todo_tags`, and `templates` tables added to `lib/db.ts` with `PRAGMA foreign_keys = ON` and cascading deletes; `subtaskDB`, `tagDB`, `templateDB` helper objects added.
+- Added pure-function unit test coverage (`lib/subtasks.ts`, `lib/tags.ts`, `lib/templates.ts` with `tests/unit/*.test.ts`, 15 tests, run via `npm run test:unit`) in addition to the Playwright e2e specs called for by the plan.
+- All 8 API routes implemented exactly as scoped (subtasks, tags, tag assignment, templates, template use).
+- UI implemented in `components/TodoApp.tsx` (this project's `app/page.tsx` renders `TodoApp`, so UI changes landed there instead of directly in `app/page.tsx`): `TodoTags`, `TodoSubtasks`, `TagModal`, `TemplateModal`, `SaveTemplateModal` components, plus "Manage Tags" and "Templates" toolbar buttons.
+- Bug found/fixed during e2e verification: the tag badge rendered its name and the remove ("×") button as sibling text nodes in the same `<span>`, so accessible/text-based queries picked up "Urgent×" instead of "Urgent". Fixed by wrapping the tag name in its own inner `<span>`. Also fixed a pre-existing `SaveTemplateModal` accessibility bug where the due-date-offset `<label>` had no `htmlFor`/`id` link to its `<input>`.
+- Final verification: `npx tsc --noEmit` clean, `npx eslint .` clean, unit tests 15/15 passing, full Playwright suite (plans 04 + 05 combined) 30/30 passing.
