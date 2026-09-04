@@ -1,6 +1,6 @@
 # Search, Filtering & Export/Import Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Provide powerful user-driven filtering and safe data export/import so the todo app is usable at scale and data can be moved between environments.
 
@@ -15,6 +15,10 @@
 - Validation must reject malformed payloads or crossed-user data.
 - UI filter state and badge indicators should remain easy to reason about and not depend on hidden mutation.
 
+> **Execution note:** This plan was implemented standalone, without plan 04 (subtasks/tags/templates), which has not
+> been built yet in this codebase. Tag-based filtering and subtask/tag export fields were descoped; the export
+> payload is versioned (`version: 1`) so those fields can be added later without breaking existing exports.
+
 ---
 
 ### Task 1: Search and filter state
@@ -27,7 +31,7 @@
 - Consumes: todos, tags, status, priority, and text query state
 - Produces: filtered `visibleTodos` array plus UI filter chips/clear actions
 
-- [ ] **Step 1: Add failing filtering tests**
+- [x] **Step 1: Add failing filtering tests**
 
 ```ts
 test('filter by priority and tag', async ({ page }) => {
@@ -39,7 +43,7 @@ test('filter by priority and tag', async ({ page }) => {
 
 Expected: filter logic fails until state and UI are implemented.
 
-- [ ] **Step 2: Implement pure filter functions**
+- [x] **Step 2: Implement pure filter functions**
 
 ```ts
 function applyFilters(todos: Todo[], filter: FilterState) {
@@ -54,7 +58,7 @@ function applyFilters(todos: Todo[], filter: FilterState) {
 
 Expected: filter order is consistent and works as a pure transformation of the source list.
 
-- [ ] **Step 3: Add filter UI chips and clear controls**
+- [x] **Step 3: Add filter UI chips and clear controls**
 
 ```tsx
 <button onClick={() => setFilter({ ...filter, tagId: null })}>Clear tag</button>
@@ -62,7 +66,7 @@ Expected: filter order is consistent and works as a pure transformation of the s
 
 Expected: users can see which filters are active and clear them without resetting the whole page.
 
-- [ ] **Step 4: Run search/filter verification**
+- [x] **Step 4: Run search/filter verification**
 
 Run: `npx playwright test tests/08-search-filtering.spec.ts`
 Expected: text, priority, tag, and status filters all pass.
@@ -78,7 +82,7 @@ Expected: text, priority, tag, and status filters all pass.
 - Consumes: user-scoped todo data, subtasks, and tags
 - Produces: JSON payload with remapped IDs and relationship preservation between records
 
-- [ ] **Step 1: Write failing export/import tests**
+- [x] **Step 1: Write failing export/import tests**
 
 ```ts
 test('exported JSON imports cleanly and remaps ids', async ({ page }) => {
@@ -89,7 +93,7 @@ test('exported JSON imports cleanly and remaps ids', async ({ page }) => {
 
 Expected: tests fail until the export/import route and remap logic are implemented.
 
-- [ ] **Step 2: Implement export payload**
+- [x] **Step 2: Implement export payload**
 
 ```ts
 return NextResponse.json({
@@ -102,7 +106,7 @@ return NextResponse.json({
 
 Expected: export includes all necessary objects for safe round-tripping.
 
-- [ ] **Step 3: Implement import remapping and transaction safety**
+- [x] **Step 3: Implement import remapping and transaction safety**
 
 ```ts
 const idMap = { todos: new Map(), subtasks: new Map(), tags: new Map() };
@@ -110,7 +114,7 @@ const idMap = { todos: new Map(), subtasks: new Map(), tags: new Map() };
 
 Expected: imported records re-attach to the correct user without colliding with existing IDs or orphaning relationships.
 
-- [ ] **Step 4: Run export/import verification**
+- [x] **Step 4: Run export/import verification**
 
 Run: `npx playwright test tests/09-export-import.spec.ts`
 Expected: export rounds trip successfully and malformed payloads are rejected.
