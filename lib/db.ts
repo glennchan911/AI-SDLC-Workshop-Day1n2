@@ -83,6 +83,15 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_templates_user_id ON templates(user_id);
+
+  CREATE TABLE IF NOT EXISTS holidays (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_holidays_date ON holidays(date);
 `);
 
 export type Priority = 'high' | 'medium' | 'low';
@@ -158,6 +167,12 @@ export interface Template {
   created_at: string;
 }
 
+export interface Holiday {
+  id: number;
+  date: string; // ISO 8601 format (YYYY-MM-DD)
+  name: string;
+  created_at: string;
+}
 
 export const userDB = {
   findById(id: number) {
@@ -435,8 +450,25 @@ export const templateDB = {
   },
 };
 
+export const holidayDB = {
+  list() {
+    return db.prepare('SELECT * FROM holidays ORDER BY date ASC').all() as Holiday[];
+  },
+  getByDate(date: string) {
+    return db.prepare('SELECT * FROM holidays WHERE date = ?').get(date) as Holiday | undefined;
+  },
+  create(date: string, name: string) {
+    db.prepare('INSERT OR IGNORE INTO holidays (date, name) VALUES (?, ?)').run(date, name);
+    return this.getByDate(date);
+  },
+  listInRange(startDate: string, endDate: string) {
+    return db.prepare('SELECT * FROM holidays WHERE date >= ? AND date <= ? ORDER BY date ASC').all(startDate, endDate) as Holiday[];
+  },
+};
+
 export function getDb() {
   return db;
 }
 
 export default db;
+

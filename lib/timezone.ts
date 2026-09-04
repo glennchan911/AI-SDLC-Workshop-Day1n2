@@ -75,3 +75,9 @@ export function formatSingaporeDateTime(value: Date | string): string {
     hour12: false,
   }).format(date);
 }
+
+export function toSingaporeDateOnly(value: string): string {
+  const parts = toSingaporeParts(value);
+  return `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
+}
+

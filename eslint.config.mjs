@@ -3,7 +3,7 @@ import tseslint from 'typescript-eslint';
 
 export default [
   {
-    ignores: ['.next/**', 'node_modules/**'],
+    ignores: ['.next/**', 'node_modules/**', 'tests/**', 'playwright.config.ts'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
