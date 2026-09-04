@@ -24,6 +24,19 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Title is required' }, { status: 400 });
   }
 
+  const isRecurring = Boolean(body.is_recurring);
+  if (isRecurring) {
+    if (!body.due_date) {
+      return NextResponse.json(
+        { error: 'Recurring todos require a due date' },
+        { status: 400 }
+      );
+    }
+    if (!['daily', 'weekly', 'monthly', 'yearly'].includes(body.recurrence_pattern)) {
+      return NextResponse.json({ error: 'Invalid recurrence pattern' }, { status: 400 });
+    }
+  }
+
   if (body.due_date) {
     const due = new Date(body.due_date);
     if (Number.isNaN(due.getTime())) {
@@ -42,8 +55,8 @@ export async function POST(request: NextRequest) {
     title,
     due_date: body.due_date ?? null,
     priority: body.priority ?? 'medium',
-    is_recurring: body.is_recurring ?? 0,
-    recurrence_pattern: body.recurrence_pattern ?? null,
+    is_recurring: isRecurring ? 1 : 0,
+    recurrence_pattern: isRecurring ? body.recurrence_pattern : null,
     reminder_minutes: body.reminder_minutes ?? null,
   });
 

@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import type { Priority, Todo } from '@/lib/db';
+import type { Priority, RecurrencePattern, Todo } from '@/lib/db';
 
 const PRIORITY_ORDER: Record<Priority, number> = { high: 0, medium: 1, low: 2 };
+const RECURRENCE_PATTERNS: RecurrencePattern[] = ['daily', 'weekly', 'monthly', 'yearly'];
 
 function sortTodos(todos: Todo[]): Todo[] {
   return [...todos].sort((a, b) => {
@@ -38,11 +39,73 @@ function formatDueDate(value: string) {
   }).format(new Date(value));
 }
 
+function RecurrenceBadge({ pattern }: { pattern: RecurrencePattern }) {
+  return (
+    <span
+      style={{
+        fontSize: '0.75rem',
+        fontWeight: 600,
+        color: '#6b21a8',
+        background: '#f3e8ff',
+        border: '1px solid #d8b4fe',
+        borderRadius: '999px',
+        padding: '0.1rem 0.6rem',
+      }}
+    >
+      🔄 {pattern}
+    </span>
+  );
+}
+
+function RecurrenceFields({
+  isRecurring,
+  pattern,
+  hasDueDate,
+  onToggle,
+  onPatternChange,
+}: {
+  isRecurring: boolean;
+  pattern: RecurrencePattern;
+  hasDueDate: boolean;
+  onToggle: (checked: boolean) => void;
+  onPatternChange: (pattern: RecurrencePattern) => void;
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.9rem', color: '#374151' }}>
+        <input
+          type="checkbox"
+          checked={isRecurring}
+          onChange={(e) => onToggle(e.target.checked)}
+          disabled={!hasDueDate}
+        />
+        Repeat
+      </label>
+      {isRecurring ? (
+        <select
+          value={pattern}
+          onChange={(e) => onPatternChange(e.target.value as RecurrencePattern)}
+          style={{ padding: '0.4rem 0.6rem', borderRadius: '0.75rem', border: '1px solid #d1d5db' }}
+        >
+          {RECURRENCE_PATTERNS.map((p) => (
+            <option key={p} value={p}>
+              {p.charAt(0).toUpperCase() + p.slice(1)}
+            </option>
+          ))}
+        </select>
+      ) : null}
+      {!hasDueDate ? <span style={{ fontSize: '0.75rem', color: '#9ca3af' }}>Set a due date to enable repeat</span> : null}
+    </div>
+  );
+}
+
 export default function TodoApp() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [title, setTitle] = useState('');
   const [priority, setPriority] = useState<Priority>('medium');
   const [dueDate, setDueDate] = useState('');
+  const [isRecurring, setIsRecurring] = useState(false);
+  const [recurrencePattern, setRecurrencePattern] = useState<RecurrencePattern>('daily');
   const [error, setError] = useState('');
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -58,7 +121,7 @@ export default function TodoApp() {
 
   async function handleAddTodo() {
     const trimmedTitle = title.trim();
-    if (!trimmedTitle) {
+    if (!trimmedTitle || (isRecurring && !dueDate)) {
       return;
     }
 
@@ -68,6 +131,8 @@ export default function TodoApp() {
       title: trimmedTitle,
       priority,
       due_date: dueDate ? new Date(dueDate).toISOString() : null,
+      is_recurring: isRecurring,
+      recurrence_pattern: isRecurring ? recurrencePattern : null,
     };
 
     try {
@@ -87,6 +152,8 @@ export default function TodoApp() {
       setTitle('');
       setPriority('medium');
       setDueDate('');
+      setIsRecurring(false);
+      setRecurrencePattern('daily');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create todo.');
     }
@@ -103,8 +170,11 @@ export default function TodoApp() {
         body: JSON.stringify({ completed: nextCompleted }),
       });
       if (!res.ok) throw new Error('Failed to update todo');
-      const updated: Todo = await res.json();
-      setTodos((prev) => prev.map((t) => (t.id === todo.id ? updated : t)));
+      const { nextInstance, ...updated } = (await res.json()) as Todo & { nextInstance?: Todo };
+      setTodos((prev) => {
+        const next = prev.map((t) => (t.id === updated.id ? (updated as Todo) : t));
+        return nextInstance ? [...next, nextInstance] : next;
+      });
     } catch {
       setTodos((prev) => prev.map((t) => (t.id === todo.id ? todo : t)));
       setError('Could not update todo. Please try again.');
@@ -124,7 +194,13 @@ export default function TodoApp() {
     }
   }
 
-  async function handleSaveEdit(updates: { title: string; priority: Priority; due_date: string | null }) {
+  async function handleSaveEdit(updates: {
+    title: string;
+    priority: Priority;
+    due_date: string | null;
+    is_recurring: boolean;
+    recurrence_pattern: RecurrencePattern | null;
+  }) {
     if (!editingTodo) return;
 
     try {
@@ -171,17 +247,30 @@ export default function TodoApp() {
           <input
             type="datetime-local"
             value={dueDate}
-            onChange={(e) => setDueDate(e.target.value)}
+            onChange={(e) => {
+              const value = e.target.value;
+              setDueDate(value);
+              if (!value) setIsRecurring(false);
+            }}
             style={{ padding: '0.6rem 0.8rem', borderRadius: '0.75rem', border: '1px solid #d1d5db' }}
           />
           <button
             type="button"
             onClick={handleAddTodo}
-            disabled={!title.trim()}
+            disabled={!title.trim() || (isRecurring && !dueDate)}
             style={{ background: '#111827', color: '#fff', padding: '0.6rem 1.2rem', borderRadius: '0.75rem', border: 'none', cursor: 'pointer' }}
           >
             Add Todo
           </button>
+        </div>
+        <div style={{ marginTop: '0.75rem' }}>
+          <RecurrenceFields
+            isRecurring={isRecurring}
+            pattern={recurrencePattern}
+            hasDueDate={Boolean(dueDate)}
+            onToggle={setIsRecurring}
+            onPatternChange={setRecurrencePattern}
+          />
         </div>
         {error ? <p style={{ color: '#b91c1c', marginTop: '0.75rem' }}>{error}</p> : null}
       </div>
@@ -242,9 +331,10 @@ function TodoSection({
                 />
                 <div>
                   <p style={{ margin: 0, fontWeight: 600, textDecoration: todo.completed ? 'line-through' : 'none' }}>{todo.title}</p>
-                  <span style={{ fontSize: '0.85rem', color: '#6b7280' }}>
+                  <span style={{ fontSize: '0.85rem', color: '#6b7280', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
                     {todo.priority}
                     {todo.due_date ? ` · due ${formatDueDate(todo.due_date)}` : ''}
+                    {todo.is_recurring && todo.recurrence_pattern ? <RecurrenceBadge pattern={todo.recurrence_pattern} /> : null}
                   </span>
                 </div>
               </div>
@@ -271,11 +361,19 @@ function EditModal({
 }: {
   todo: Todo;
   onCancel: () => void;
-  onSave: (updates: { title: string; priority: Priority; due_date: string | null }) => void;
+  onSave: (updates: {
+    title: string;
+    priority: Priority;
+    due_date: string | null;
+    is_recurring: boolean;
+    recurrence_pattern: RecurrencePattern | null;
+  }) => void;
 }) {
   const [title, setTitle] = useState(todo.title);
   const [priority, setPriority] = useState<Priority>(todo.priority);
   const [dueDate, setDueDate] = useState(todo.due_date ? todo.due_date.slice(0, 16) : '');
+  const [isRecurring, setIsRecurring] = useState(Boolean(todo.is_recurring));
+  const [recurrencePattern, setRecurrencePattern] = useState<RecurrencePattern>(todo.recurrence_pattern ?? 'daily');
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -316,9 +414,22 @@ function EditModal({
         <input
           type="datetime-local"
           value={dueDate}
-          onChange={(e) => setDueDate(e.target.value)}
-          style={{ width: '100%', padding: '0.6rem 0.8rem', borderRadius: '0.75rem', border: '1px solid #d1d5db', marginBottom: '1.5rem' }}
+          onChange={(e) => {
+            const value = e.target.value;
+            setDueDate(value);
+            if (!value) setIsRecurring(false);
+          }}
+          style={{ width: '100%', padding: '0.6rem 0.8rem', borderRadius: '0.75rem', border: '1px solid #d1d5db', marginBottom: '1rem' }}
         />
+        <div style={{ marginBottom: '1.5rem' }}>
+          <RecurrenceFields
+            isRecurring={isRecurring}
+            pattern={recurrencePattern}
+            hasDueDate={Boolean(dueDate)}
+            onToggle={setIsRecurring}
+            onPatternChange={setRecurrencePattern}
+          />
+        </div>
         <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
           <button type="button" onClick={onCancel} style={{ padding: '0.6rem 1.2rem', borderRadius: '0.75rem', border: '1px solid #d1d5db', background: '#fff', cursor: 'pointer' }}>
             Cancel
@@ -330,9 +441,11 @@ function EditModal({
                 title: title.trim(),
                 priority,
                 due_date: dueDate ? new Date(dueDate).toISOString() : null,
+                is_recurring: isRecurring,
+                recurrence_pattern: isRecurring ? recurrencePattern : null,
               })
             }
-            disabled={!title.trim()}
+            disabled={!title.trim() || (isRecurring && !dueDate)}
             style={{ padding: '0.6rem 1.2rem', borderRadius: '0.75rem', border: 'none', background: '#111827', color: '#fff', cursor: 'pointer' }}
           >
             Update
