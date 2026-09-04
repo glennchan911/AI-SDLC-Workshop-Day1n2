@@ -114,8 +114,14 @@ export const todoDB = {
   listByUser(userId: number) {
     return db.prepare('SELECT * FROM todos WHERE user_id = ? ORDER BY created_at DESC').all(userId) as Todo[];
   },
+  getTodosByUser(userId: number) {
+    return this.listByUser(userId);
+  },
   getById(userId: number, id: number) {
     return db.prepare('SELECT * FROM todos WHERE id = ? AND user_id = ?').get(id, userId) as Todo | undefined;
+  },
+  getTodoById(userId: number, id: number) {
+    return this.getById(userId, id);
   },
   create(userId: number, todo: Partial<Todo>) {
     const result = db.prepare(
@@ -133,6 +139,56 @@ export const todoDB = {
       todo.last_notification_sent ?? null,
     );
     return this.getById(userId, Number(result.lastInsertRowid));
+  },
+  createTodo(userId: number, todo: Partial<Todo>) {
+    return this.create(userId, todo);
+  },
+  update(userId: number, id: number, patch: Partial<Todo>) {
+    const existing = this.getById(userId, id);
+    if (!existing) {
+      return undefined;
+    }
+
+    const fields: Array<keyof Todo> = [
+      'title',
+      'completed',
+      'due_date',
+      'priority',
+      'is_recurring',
+      'recurrence_pattern',
+      'reminder_minutes',
+      'last_notification_sent',
+    ];
+
+    const setClauses: string[] = [];
+    const values: unknown[] = [];
+
+    for (const field of fields) {
+      if (Object.prototype.hasOwnProperty.call(patch, field)) {
+        setClauses.push(`${field} = ?`);
+        values.push(patch[field] ?? null);
+      }
+    }
+
+    if (setClauses.length === 0) {
+      return existing;
+    }
+
+    setClauses.push("updated_at = datetime('now')");
+    values.push(id, userId);
+
+    db.prepare(`UPDATE todos SET ${setClauses.join(', ')} WHERE id = ? AND user_id = ?`).run(...values);
+    return this.getById(userId, id);
+  },
+  updateTodo(userId: number, id: number, patch: Partial<Todo>) {
+    return this.update(userId, id, patch);
+  },
+  delete(userId: number, id: number) {
+    const result = db.prepare('DELETE FROM todos WHERE id = ? AND user_id = ?').run(id, userId);
+    return result.changes > 0;
+  },
+  deleteTodo(userId: number, id: number) {
+    return this.delete(userId, id);
   },
 };
 

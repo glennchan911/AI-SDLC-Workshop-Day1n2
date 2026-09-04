@@ -1,6 +1,6 @@
 # Todo CRUD Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-KILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-KILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build the base todo resource and its user-facing list workflow so every later todo feature sits on a stable CRUD foundation.
 
@@ -29,7 +29,7 @@
 - Consumes: auth session helpers from Step 1
 - Produces: `createTodo`, `getTodosByUser`, `getTodoById`, `updateTodo`, `deleteTodo`
 
-- [ ] **Step 1: Add failing tests for todo CRUD**
+- [x] **Step 1: Add failing tests for todo CRUD**
 
 ```ts
 test('user can create a todo with title only', async ({ page }) => {
@@ -41,7 +41,7 @@ test('user can create a todo with title only', async ({ page }) => {
 
 Expected: tests fail until the todo API and UI exist.
 
-- [ ] **Step 2: Implement DB methods and validation**
+- [x] **Step 2: Implement DB methods and validation**
 
 ```ts
 // lib/db.ts
@@ -56,7 +56,7 @@ export const todoDB = {
 
 Expected: user-scoped queries return only that user’s todos and delete cascades to dependent records.
 
-- [ ] **Step 3: Implement the todo API routes**
+- [x] **Step 3: Implement the todo API routes**
 
 ```ts
 // app/api/todos/route.ts
@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
 
 Expected: create/read/update/delete endpoints are all protected and return JSON payloads.
 
-- [ ] **Step 4: Validate plus route behavior**
+- [x] **Step 4: Validate plus route behavior**
 
 Run: `npx playwright test tests/02-todo-crud.spec.ts --grep "Create todo"`
 Expected: create and read operations work, and invalid due dates get blocked.
@@ -86,7 +86,7 @@ Expected: create and read operations work, and invalid due dates get blocked.
 - Consumes: `GET /api/todos` and `POST/PUT/DELETE /api/todos`
 - Produces: renderable todo list with Overdue/Active/Completed sections
 
-- [ ] **Step 1: Implement list fetch and state hydration**
+- [x] **Step 1: Implement list fetch and state hydration**
 
 ```ts
 useEffect(() => {
@@ -96,7 +96,7 @@ useEffect(() => {
 
 Expected: the main page loads todos from the authenticated API once the user is signed in.
 
-- [ ] **Step 2: Add create and delete actions**
+- [x] **Step 2: Add create and delete actions**
 
 ```ts
 async function handleAddTodo() {
@@ -106,7 +106,7 @@ async function handleAddTodo() {
 
 Expected: new todos appear immediately in the right section and delete removes the row cleanly.
 
-- [ ] **Step 3: Add edit/toggle completion and sections**
+- [x] **Step 3: Add edit/toggle completion and sections**
 
 ```ts
 const grouped = {
@@ -118,7 +118,7 @@ const grouped = {
 
 Expected: completion toggles move items between sections and sorting remains deterministic.
 
-- [ ] **Step 4: Run the todo CRUD E2E suite**
+- [x] **Step 4: Run the todo CRUD E2E suite**
 
 Run: `npx playwright test tests/02-todo-crud.spec.ts`
 Expected: create/edit/toggle/delete flows all pass with validation in place.
